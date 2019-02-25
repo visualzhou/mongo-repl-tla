@@ -6,10 +6,10 @@ MongoDB secondaries pull oplogs from any nodes that have more up-to-date oplogs,
 The spec also simplifies the election protocol. Every election will succeed in one shot, including sending and replying vote requests and learning the new term.
 
 ## Model Checking
-I have successfully run model checker on the spec with a small model that has:
+I have successfully run model checker on the spec with a small model including:
 - 3 nodes (symmetrical model value)
 - Term up to 3
-- # of logs up to 10
+- Number of logs up to 10
 
 State constraint:
 ```
