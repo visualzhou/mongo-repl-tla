@@ -27,7 +27,12 @@ VARIABLE globalCurrentTerm
 
 \* The server's state (Follower, Candidate, or Leader).
 VARIABLE state
-serverVars == <<globalCurrentTerm, state>>
+
+\* The commit point learned by each server.
+VARIABLE commitPoint
+
+electionVars == <<globalCurrentTerm, state>>
+serverVars == <<electionVars, commitPoint>>
 
 \* A Sequence of log entries. The index into this sequence is the index of the
 \* log entry. Unfortunately, the Sequence module defines Head(s) as the entry
@@ -93,30 +98,31 @@ RollbackOplog(i, j) ==
          IN log' = [log EXCEPT ![i] = new]
     /\ UNCHANGED <<serverVars>>
 
+\* The set of nodes that has log[me][logIndex] in their oplog
+Agree(me, logIndex) ==
+    { node \in Server :
+        /\ Len(log[node]) >= logIndex
+        /\ LogTerm(me, logIndex) = LogTerm(node, logIndex) }
+
+IsCommitted(me, logIndex) ==
+    /\ Agree(me, logIndex) \in Quorum
+    \* If we comment out the following line, a replicated log entry from old primary will voilate the safety.
+    \* [ P (2), S (), S ()]
+    \* [ S (2), S (), P (3)]
+    \* [ S (2), S (2), P (3)] !!! the log from term 2 shouldn't be considered as committed.
+    /\ LogTerm(me, logIndex) = globalCurrentTerm
 
 \* RollbackCommitted and NeverRollbackCommitted are not actions.
 \* They are used for verification.
 RollbackCommitted(i) ==
-    LET
-        \* The set of nodes that has log[me][logIndex] in their oplog
-        Agree(me, logIndex) ==
-            { node \in Server :
-                /\ Len(log[node]) >= logIndex
-                /\ LogTerm(me, logIndex) = LogTerm(node, logIndex) }
-        IsCommitted(me, logIndex) ==
-            /\ Agree(me, logIndex) \in Quorum
-            \* If we comment out the following line, a replicated log entry from old primary will voilate the safety.
-            \* [ P (2), S (), S ()]
-            \* [ S (2), S (), P (3)]
-            \* [ S (2), S (2), P (3)] !!! the log from term 2 shouldn't be considered as committed.
-            /\ LogTerm(me, logIndex) = globalCurrentTerm
-    IN  \E j \in Server:
+    \E j \in Server:
         /\ CanRollbackOplog(i, j)
         /\ IsCommitted(i, Len(log[i]))
 
 NeverRollbackCommitted ==
     \A i \in Server: ~RollbackCommitted(i)
 
+\* ACTION
 \* i = the new primary node.
 BecomePrimaryByMagic(i) ==
     LET notBehind(me, j) ==
@@ -128,8 +134,9 @@ BecomePrimaryByMagic(i) ==
     IN /\ ayeVoters(i) \in Quorum
        /\ state' = [index \in Server |-> IF index = i THEN Leader ELSE Follower]
        /\ globalCurrentTerm' = globalCurrentTerm + 1
-       /\ UNCHANGED <<logVars>>
+       /\ UNCHANGED <<commitPoint, logVars>>
 
+\* ACTION
 \* Leader i receives a client request to add v to the log.
 ClientWrite(i, v) ==
     /\ state[i] = Leader
@@ -138,6 +145,14 @@ ClientWrite(i, v) ==
            newLog == Append(log[i], entry)
        IN  log' = [log EXCEPT ![i] = newLog]
     /\ UNCHANGED <<serverVars>>
+
+\* ACTION
+AdvanceCommitPoint ==
+    /\ \E leader \in Server :
+        /\ state[leader] = Leader
+        /\ IsCommitted(leader, Len(log[leader]))
+        /\ commitPoint' = [commitPoint EXCEPT ![leader] = [term |-> LastTerm(log[leader]), index |-> Len(log[leader])]]
+        /\ UNCHANGED <<electionVars>>
 
 ----
 \* Defines how the variables may transition.
