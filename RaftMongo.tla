@@ -54,8 +54,9 @@ vars == <<serverVars, logVars>>
 Quorum == {i \in SUBSET(Server) : Cardinality(i) * 2 > Cardinality(Server)}
 
 \* The term of the last entry in a log, or 0 if the log is empty.
-LogTerm(i, index) == IF index = 0 THEN 0 ELSE log[i][index].term
-LastTerm(xlog) == IF Len(xlog) = 0 THEN 0 ELSE xlog[Len(xlog)].term
+GetTerm(xlog, index) == IF index = 0 THEN 0 ELSE xlog[index].term
+LogTerm(i, index) == GetTerm(log[i], index)
+LastTerm(xlog) == GetTerm(xlog, Len(xlog))
 
 \* Return the minimum value from a set, or undefined if the set is empty.
 Min(s) == CHOOSE x \in s : \A y \in s : x <= y
@@ -65,8 +66,9 @@ Max(s) == CHOOSE x \in s : \A y \in s : x >= y
 ----
 \* Define initial values for all variables
 
-InitServerVars == /\ globalCurrentTerm = 1
+InitServerVars == /\ globalCurrentTerm = 0
                   /\ state             = [i \in Server |-> Follower]
+                  /\ commitPoint       = [i \in Server |-> [term |-> 0, index |-> 0]]
 InitLogVars == /\ log          = [i \in Server |-> << >>]
 Init == /\ InitServerVars
         /\ InitLogVars
@@ -148,11 +150,29 @@ ClientWrite(i, v) ==
 
 \* ACTION
 AdvanceCommitPoint ==
-    /\ \E leader \in Server :
+    \E leader \in Server :
         /\ state[leader] = Leader
         /\ IsCommitted(leader, Len(log[leader]))
         /\ commitPoint' = [commitPoint EXCEPT ![leader] = [term |-> LastTerm(log[leader]), index |-> Len(log[leader])]]
-        /\ UNCHANGED <<electionVars>>
+        /\ UNCHANGED <<electionVars, logVars>>
+
+\* ACTION
+\* Node i learns the commit point from j via heartbeat.
+LearnCommitPoint(i, j) ==
+    /\ \/ commitPoint[i].term < commitPoint[j].term
+       \/ /\ commitPoint[i].term = commitPoint[j].term
+          /\ commitPoint[i].index < commitPoint[j].index
+    /\ commitPoint' = [commitPoint EXCEPT ![i] = commitPoint[j]]
+    /\ UNCHANGED <<electionVars, logVars>>
+
+RollbackBeforeCommitPoint(i) ==
+    /\ \E j \in Server:
+        /\ CanRollbackOplog(i, j)
+    /\ \/ LastTerm(log[i]) < commitPoint[i].term
+       \/ /\ LastTerm(log[i]) = commitPoint[i].term
+          /\ Len(log[i]) <= commitPoint[i].index
+
+NeverRollbackBeforeCommitPoint == \A i \in Server: ~RollbackBeforeCommitPoint(i)
 
 ----
 \* Defines how the variables may transition.
@@ -161,6 +181,8 @@ Next == /\
            \/ \E i,j \in Server : RollbackOplog(i, j)
            \/ \E i \in Server : BecomePrimaryByMagic(i)
            \/ \E i \in Server, v \in Value : ClientWrite(i, v)
+           \/ AdvanceCommitPoint
+           \/ \E i, j \in Server : LearnCommitPoint(i, j)
 
 \* The specification must start with the initial state and transition according
 \* to Next.
