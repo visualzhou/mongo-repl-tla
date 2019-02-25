@@ -165,6 +165,24 @@ LearnCommitPoint(i, j) ==
     /\ commitPoint' = [commitPoint EXCEPT ![i] = commitPoint[j]]
     /\ UNCHANGED <<electionVars, logVars>>
 
+\* ACTION
+LearnCommitPointFromSyncSource(i, j) ==
+    /\ Len(log[i]) < Len(log[j])
+    /\ LastTerm(log[i]) = LogTerm(j, Len(log[i]))
+    /\ LearnCommitPoint(i, j)
+
+\* ACTION
+AppendEntryAndLearnCommitPointFromSyncSource(i, j) ==
+    /\ Len(log[i]) < Len(log[j])
+    /\ LastTerm(log[i]) = LogTerm(j, Len(log[i]))
+    /\ LearnCommitPoint(i, j)
+    /\ log' = [log EXCEPT ![i] = Append(log[i], log[j][Len(log[i]) + 1])]
+    /\ \/ commitPoint[i].term < commitPoint[j].term
+       \/ /\ commitPoint[i].term = commitPoint[j].term
+          /\ commitPoint[i].index < commitPoint[j].index
+    /\ commitPoint' = [commitPoint EXCEPT ![i] = commitPoint[j]]
+    /\ UNCHANGED <<electionVars>>
+
 RollbackBeforeCommitPoint(i) ==
     /\ \E j \in Server:
         /\ CanRollbackOplog(i, j)
@@ -182,7 +200,8 @@ Next == /\
            \/ \E i \in Server : BecomePrimaryByMagic(i)
            \/ \E i \in Server, v \in Value : ClientWrite(i, v)
            \/ AdvanceCommitPoint
-           \/ \E i, j \in Server : LearnCommitPoint(i, j)
+           \* \/ \E i, j \in Server : LearnCommitPoint(i, j)
+           \/ \E i, j \in Server : AppendEntryAndLearnCommitPointFromSyncSource(i, j)
 
 \* The specification must start with the initial state and transition according
 \* to Next.
