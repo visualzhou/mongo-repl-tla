@@ -183,6 +183,21 @@ LearnCommitPointFromSyncSource(i, j) ==
     /\ LearnCommitPoint(i, j)
 
 \* ACTION
+LearnCommitPointFromSyncSourceNeverBeyondLastApplied(i, j) ==
+    \* From sync source
+    /\ Len(log[i]) < Len(log[j])
+    /\ LastTerm(log[i]) = LogTerm(j, Len(log[i]))
+    /\ CommitPointLessThan(i, j)
+    \* Never beyond last applied
+    /\ LET myCommitPoint ==
+            \* If they have the same term, commit point can be ahead.
+            IF commitPoint[j].term <= LastTerm(log[i])
+            THEN commitPoint[j]
+            ELSE [term |-> LastTerm(log[i]), index |-> Len(log[i])]
+       IN commitPoint' = [commitPoint EXCEPT ![i] = myCommitPoint]
+    /\ UNCHANGED <<electionVars, logVars>>
+
+\* ACTION
 AppendEntryAndLearnCommitPointFromSyncSource(i, j) ==
     \* Append entry
     /\ Len(log[i]) < Len(log[j])
@@ -213,7 +228,8 @@ Next == /\
            \* \/ \E i, j \in Server : LearnCommitPoint(i, j)
            \* \/ \E i, j \in Server : LearnCommitPointFromSyncSource(i, j)
            \* \/ \E i, j \in Server : AppendEntryAndLearnCommitPointFromSyncSource(i, j)
-           \/ \E i, j \in Server : LearnCommitPointWithTermCheck(i, j)
+           \* \/ \E i, j \in Server : LearnCommitPointWithTermCheck(i, j)
+           \/ \E i, j \in Server : LearnCommitPointFromSyncSourceNeverBeyondLastApplied(i, j)
 
 \* The specification must start with the initial state and transition according
 \* to Next.
