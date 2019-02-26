@@ -78,6 +78,7 @@ Init == /\ InitServerVars
 \* i = recipient, j = sender, m = message
 
 AppendOplog(i, j) ==
+    \* /\ state[i] = Follower  \* Disable primary catchup and draining
     /\ Len(log[i]) < Len(log[j])
     /\ LastTerm(log[i]) = LogTerm(j, Len(log[i]))
     /\ log' = [log EXCEPT ![i] = Append(log[i], log[j][Len(log[i]) + 1])]
@@ -156,14 +157,24 @@ AdvanceCommitPoint ==
         /\ commitPoint' = [commitPoint EXCEPT ![leader] = [term |-> LastTerm(log[leader]), index |-> Len(log[leader])]]
         /\ UNCHANGED <<electionVars, logVars>>
 
+\* Return whether Node i can learn the commit point from Node j.
+CommitPointLessThan(i, j) ==
+   \/ commitPoint[i].term < commitPoint[j].term
+   \/ /\ commitPoint[i].term = commitPoint[j].term
+      /\ commitPoint[i].index < commitPoint[j].index
+
 \* ACTION
 \* Node i learns the commit point from j via heartbeat.
 LearnCommitPoint(i, j) ==
-    /\ \/ commitPoint[i].term < commitPoint[j].term
-       \/ /\ commitPoint[i].term = commitPoint[j].term
-          /\ commitPoint[i].index < commitPoint[j].index
+    /\ CommitPointLessThan(i, j)
     /\ commitPoint' = [commitPoint EXCEPT ![i] = commitPoint[j]]
     /\ UNCHANGED <<electionVars, logVars>>
+
+\* ACTION
+\* Node i learns the commit point from j via heartbeat with term check
+LearnCommitPointWithTermCheck(i, j) ==
+    /\ LastTerm(log[i]) = commitPoint[j].term
+    /\ LearnCommitPoint(i, j)
 
 \* ACTION
 LearnCommitPointFromSyncSource(i, j) ==
@@ -173,13 +184,12 @@ LearnCommitPointFromSyncSource(i, j) ==
 
 \* ACTION
 AppendEntryAndLearnCommitPointFromSyncSource(i, j) ==
+    \* Append entry
     /\ Len(log[i]) < Len(log[j])
     /\ LastTerm(log[i]) = LogTerm(j, Len(log[i]))
-    /\ LearnCommitPoint(i, j)
     /\ log' = [log EXCEPT ![i] = Append(log[i], log[j][Len(log[i]) + 1])]
-    /\ \/ commitPoint[i].term < commitPoint[j].term
-       \/ /\ commitPoint[i].term = commitPoint[j].term
-          /\ commitPoint[i].index < commitPoint[j].index
+    \* Learn commit point
+    /\ CommitPointLessThan(i, j)
     /\ commitPoint' = [commitPoint EXCEPT ![i] = commitPoint[j]]
     /\ UNCHANGED <<electionVars>>
 
@@ -201,7 +211,9 @@ Next == /\
            \/ \E i \in Server, v \in Value : ClientWrite(i, v)
            \/ AdvanceCommitPoint
            \* \/ \E i, j \in Server : LearnCommitPoint(i, j)
-           \/ \E i, j \in Server : AppendEntryAndLearnCommitPointFromSyncSource(i, j)
+           \* \/ \E i, j \in Server : LearnCommitPointFromSyncSource(i, j)
+           \* \/ \E i, j \in Server : AppendEntryAndLearnCommitPointFromSyncSource(i, j)
+           \/ \E i, j \in Server : LearnCommitPointWithTermCheck(i, j)
 
 \* The specification must start with the initial state and transition according
 \* to Next.
