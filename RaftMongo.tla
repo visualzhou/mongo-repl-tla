@@ -277,10 +277,14 @@ Liveness ==
     \* A new primary should eventually write one entry.
     /\ WF_vars(\E i \in Server : LastTerm(log[i]) # globalCurrentTerm /\ ClientWrite(i))
     \* /\ WF_vars(ClientWriteAction)
+    \*
+    \* --- Commit point learning protocol
     /\ WF_vars(AdvanceCommitPoint)
     \* /\ WF_vars(LearnCommitPointAction)
     /\ SF_vars(LearnCommitPointFromSyncSourceAction)
+    \* /\ SF_vars(AppendEntryAndLearnCommitPointFromSyncSourceAction)
     \* /\ SF_vars(LearnCommitPointWithTermCheckAction)
+    \* /\ SF_vars(LearnCommitPointFromSyncSourceNeverBeyondLastAppliedAction)
 
 \* The specification must start with the initial state and transition according
 \* to Next.
