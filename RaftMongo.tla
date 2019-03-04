@@ -174,15 +174,13 @@ LearnCommitPointWithTermCheck(i, j) ==
 
 \* ACTION
 LearnCommitPointFromSyncSource(i, j) ==
-    /\ Len(log[i]) < Len(log[j])
-    /\ LastTerm(log[i]) = LogTerm(j, Len(log[i]))
+    /\ ENABLED AppendOplog(i, j)
     /\ LearnCommitPoint(i, j)
 
 \* ACTION
 LearnCommitPointFromSyncSourceNeverBeyondLastApplied(i, j) ==
     \* From sync source
-    /\ Len(log[i]) < Len(log[j])
-    /\ LastTerm(log[i]) = LogTerm(j, Len(log[i]))
+    /\ ENABLED AppendOplog(i, j)
     /\ CommitPointLessThan(i, j)
     \* Never beyond last applied
     /\ LET myCommitPoint ==
