@@ -6,9 +6,6 @@ EXTENDS Naturals, FiniteSets, Sequences, TLC
 \* The set of server IDs
 CONSTANTS Server
 
-\* The set of requests that can go into the log
-CONSTANTS Value
-
 \* Server states.
 \* Candidate is not used, but this is fine.
 CONSTANTS Follower, Candidate, Leader
@@ -143,8 +140,7 @@ BecomePrimaryByMagic(i) ==
 \* Leader i receives a client request to add v to the log.
 ClientWrite(i) ==
     /\ state[i] = Leader
-    /\ LET entry == [term  |-> globalCurrentTerm,
-                     value |-> Value]
+    /\ LET entry == [term  |-> globalCurrentTerm]
            newLog == Append(log[i], entry)
        IN  log' = [log EXCEPT ![i] = newLog]
     /\ UNCHANGED <<serverVars>>
