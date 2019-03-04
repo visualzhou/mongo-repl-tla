@@ -252,7 +252,8 @@ NeverRollbackBeforeCommitPoint == \A i \in Server: ~RollbackBeforeCommitPoint(i)
 \* This is checked after all possible rollback is done.
 CommitPointEventuallyPropagates ==
     /\ \A i, j \in Server:
-        [](CommitPointLessThan(i, j) ~> <>(~ENABLED RollbackOplogAction => ~CommitPointLessThan(i, j)))
+        [](commitPoint[i] # commitPoint[j] ~>
+               <>(~ENABLED RollbackOplogAction => commitPoint[i] = commitPoint[j]))
 
 ----
 \* Defines how the variables may transition.
