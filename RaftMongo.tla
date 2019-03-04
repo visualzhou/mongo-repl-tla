@@ -209,29 +209,6 @@ AppendEntryAndLearnCommitPointFromSyncSource(i, j) ==
     /\ UNCHANGED <<electionVars>>
 
 ----
-\* Properties to check
-
-RollbackBeforeCommitPoint(i) ==
-    /\ \E j \in Server:
-        /\ CanRollbackOplog(i, j)
-    /\ \/ LastTerm(log[i]) < commitPoint[i].term
-       \/ /\ LastTerm(log[i]) = commitPoint[i].term
-          /\ Len(log[i]) <= commitPoint[i].index
-\* todo: clean up
-
-NeverRollbackBeforeCommitPoint == \A i \in Server: ~RollbackBeforeCommitPoint(i)
-
-\* Liveness check
-
-\* This isn't accurate for any infinite behavior specified by Spec, but it's fine
-\* for any finite behavior with the liveness we can check with the model checker.
-\* This is to check at any time, if two nodes' commit points are not the same, they
-\* will be the same eventually.
-CommitPointEventuallyPropagates ==
-    \A i, j \in Server:
-        [](CommitPointLessThan(i, j) ~> <>~CommitPointLessThan(i, j))
-
-----
 AppendOplogAction ==
     \E i,j \in Server : AppendOplog(i, j)
 
@@ -259,6 +236,31 @@ LearnCommitPointFromSyncSourceNeverBeyondLastAppliedAction ==
 AppendEntryAndLearnCommitPointFromSyncSourceAction ==
     \E i, j \in Server : AppendEntryAndLearnCommitPointFromSyncSource(i, j)
 
+----
+\* Properties to check
+
+RollbackBeforeCommitPoint(i) ==
+    /\ \E j \in Server:
+        /\ CanRollbackOplog(i, j)
+    /\ \/ LastTerm(log[i]) < commitPoint[i].term
+       \/ /\ LastTerm(log[i]) = commitPoint[i].term
+          /\ Len(log[i]) <= commitPoint[i].index
+\* todo: clean up
+
+NeverRollbackBeforeCommitPoint == \A i \in Server: ~RollbackBeforeCommitPoint(i)
+
+\* Liveness check
+
+\* This isn't accurate for any infinite behavior specified by Spec, but it's fine
+\* for any finite behavior with the liveness we can check with the model checker.
+\* This is to check at any time, if two nodes' commit points are not the same, they
+\* will be the same eventually.
+\* This is checked after all possible rollback is done.
+CommitPointEventuallyPropagates ==
+    /\ \A i, j \in Server:
+        [](CommitPointLessThan(i, j) ~> <>(~ENABLED RollbackOplogAction => ~CommitPointLessThan(i, j)))
+
+----
 \* Defines how the variables may transition.
 Next ==
     \* --- Replication protocol
@@ -278,7 +280,10 @@ Next ==
 Liveness ==
     /\ SF_vars(AppendOplogAction)
     /\ SF_vars(RollbackOplogAction)
+    \* A new primary should eventually write one entry.
+    /\ WF_vars(\E i \in Server : LastTerm(log[i]) # globalCurrentTerm /\ ClientWrite(i))
     \* /\ WF_vars(ClientWriteAction)
+    /\ WF_vars(AdvanceCommitPoint)
     \* /\ WF_vars(LearnCommitPointAction)
     /\ SF_vars(LearnCommitPointFromSyncSourceAction)
     \* /\ SF_vars(LearnCommitPointWithTermCheckAction)
