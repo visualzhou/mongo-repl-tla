@@ -16,7 +16,10 @@ CONSTANTS Nil
 ----
 \* Global variables
 
-\* The server's term number.
+\* Servers in a given config version
+\* VARIABLE servers
+
+\* The server's term number in a given config version
 VARIABLE globalCurrentTerm
 
 ----
@@ -25,7 +28,7 @@ VARIABLE globalCurrentTerm
 \* The server's state (Follower, Candidate, or Leader).
 VARIABLE state
 
-\* The commit point learned by each server.
+\* The commit point.
 VARIABLE commitPoint
 
 electionVars == <<globalCurrentTerm, state>>
@@ -65,7 +68,7 @@ Max(s) == CHOOSE x \in s : \A y \in s : x >= y
 
 InitServerVars == /\ globalCurrentTerm = 0
                   /\ state             = [i \in Server |-> Follower]
-                  /\ commitPoint       = [i \in Server |-> [term |-> 0, index |-> 0]]
+                  /\ commitPoint       = [term |-> 0, index |-> 0]
 InitLogVars == /\ log          = [i \in Server |-> << >>]
 Init == /\ InitServerVars
         /\ InitLogVars
@@ -112,12 +115,20 @@ IsCommitted(me, logIndex) ==
     \* [ S (2), S (2), P (3)] !!! the log from term 2 shouldn't be considered as committed.
     /\ LogTerm(me, logIndex) = globalCurrentTerm
 
+\* Commit point is visible to clients via write concerns.
+AdvanceCommitPoint ==
+    \E leader \in Server :
+        \* /\ state[leader] = Leader
+        /\ IsCommitted(leader, Len(log[leader]))
+        /\ commitPoint' = [term |-> LastTerm(log[leader]), index |-> Len(log[leader])]
+        /\ UNCHANGED <<electionVars, logVars>>
+
 \* RollbackCommitted and NeverRollbackCommitted are not actions.
 \* They are used for verification.
 RollbackCommitted(i) ==
-    \E j \in Server:
-        /\ CanRollbackOplog(i, j)
-        /\ IsCommitted(i, Len(log[i]))
+    /\ Len(log[i]) = commitPoint.index
+    /\ LastTerm(log[i]) = commitPoint.term
+    /\ \E j \in Server: CanRollbackOplog(i, j)
 
 NeverRollbackCommitted ==
     \A i \in Server: ~RollbackCommitted(i)
@@ -159,31 +170,6 @@ ClientWriteAction ==
     \E i \in Server : ClientWrite(i)
 
 ----
-\* Properties to check
-
-RollbackBeforeCommitPoint(i) ==
-    /\ \E j \in Server:
-        /\ CanRollbackOplog(i, j)
-    /\ \/ LastTerm(log[i]) < commitPoint[i].term
-       \/ /\ LastTerm(log[i]) = commitPoint[i].term
-          /\ Len(log[i]) <= commitPoint[i].index
-\* todo: clean up
-
-NeverRollbackBeforeCommitPoint == \A i \in Server: ~RollbackBeforeCommitPoint(i)
-
-\* Liveness check
-
-\* This isn't accurate for any infinite behavior specified by Spec, but it's fine
-\* for any finite behavior with the liveness we can check with the model checker.
-\* This is to check at any time, if two nodes' commit points are not the same, they
-\* will be the same eventually.
-\* This is checked after all possible rollback is done.
-CommitPointEventuallyPropagates ==
-    /\ \A i, j \in Server:
-        [](commitPoint[i] # commitPoint[j] ~>
-               <>(~ENABLED RollbackOplogAction => commitPoint[i] = commitPoint[j]))
-
-----
 \* Defines how the variables may transition.
 Next ==
     \* --- Replication protocol
@@ -191,6 +177,7 @@ Next ==
     \/ RollbackOplogAction
     \/ BecomePrimaryByMagicAction
     \/ ClientWriteAction
+    \/ AdvanceCommitPoint
 
 Liveness ==
     /\ SF_vars(AppendOplogAction)
