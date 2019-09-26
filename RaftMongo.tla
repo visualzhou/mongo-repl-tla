@@ -145,63 +145,6 @@ ClientWrite(i) ==
        IN  log' = [log EXCEPT ![i] = newLog]
     /\ UNCHANGED <<serverVars>>
 
-\* ACTION
-AdvanceCommitPoint ==
-    \E leader \in Server :
-        /\ state[leader] = Leader
-        /\ IsCommitted(leader, Len(log[leader]))
-        /\ commitPoint' = [commitPoint EXCEPT ![leader] = [term |-> LastTerm(log[leader]), index |-> Len(log[leader])]]
-        /\ UNCHANGED <<electionVars, logVars>>
-
-\* Return whether Node i can learn the commit point from Node j.
-CommitPointLessThan(i, j) ==
-   \/ commitPoint[i].term < commitPoint[j].term
-   \/ /\ commitPoint[i].term = commitPoint[j].term
-      /\ commitPoint[i].index < commitPoint[j].index
-
-\* ACTION
-\* Node i learns the commit point from j via heartbeat.
-LearnCommitPoint(i, j) ==
-    /\ CommitPointLessThan(i, j)
-    /\ commitPoint' = [commitPoint EXCEPT ![i] = commitPoint[j]]
-    /\ UNCHANGED <<electionVars, logVars>>
-
-\* ACTION
-\* Node i learns the commit point from j via heartbeat with term check
-LearnCommitPointWithTermCheck(i, j) ==
-    /\ LastTerm(log[i]) = commitPoint[j].term
-    /\ LearnCommitPoint(i, j)
-
-\* ACTION
-LearnCommitPointFromSyncSource(i, j) ==
-    /\ ENABLED AppendOplog(i, j)
-    /\ LearnCommitPoint(i, j)
-
-\* ACTION
-LearnCommitPointFromSyncSourceNeverBeyondLastApplied(i, j) ==
-    \* From sync source
-    /\ ENABLED AppendOplog(i, j)
-    /\ CommitPointLessThan(i, j)
-    \* Never beyond last applied
-    /\ LET myCommitPoint ==
-            \* If they have the same term, commit point can be ahead.
-            IF commitPoint[j].term <= LastTerm(log[i])
-            THEN commitPoint[j]
-            ELSE [term |-> LastTerm(log[i]), index |-> Len(log[i])]
-       IN commitPoint' = [commitPoint EXCEPT ![i] = myCommitPoint]
-    /\ UNCHANGED <<electionVars, logVars>>
-
-\* ACTION
-AppendEntryAndLearnCommitPointFromSyncSource(i, j) ==
-    \* Append entry
-    /\ Len(log[i]) < Len(log[j])
-    /\ LastTerm(log[i]) = LogTerm(j, Len(log[i]))
-    /\ log' = [log EXCEPT ![i] = Append(log[i], log[j][Len(log[i]) + 1])]
-    \* Learn commit point
-    /\ CommitPointLessThan(i, j)
-    /\ commitPoint' = [commitPoint EXCEPT ![i] = commitPoint[j]]
-    /\ UNCHANGED <<electionVars>>
-
 ----
 AppendOplogAction ==
     \E i,j \in Server : AppendOplog(i, j)
@@ -214,21 +157,6 @@ BecomePrimaryByMagicAction ==
 
 ClientWriteAction ==
     \E i \in Server : ClientWrite(i)
-
-LearnCommitPointAction ==
-    \E i, j \in Server : LearnCommitPoint(i, j)
-
-LearnCommitPointWithTermCheckAction ==
-    \E i, j \in Server : LearnCommitPointWithTermCheck(i, j)
-
-LearnCommitPointFromSyncSourceAction ==
-    \E i, j \in Server : LearnCommitPointFromSyncSource(i, j)
-
-LearnCommitPointFromSyncSourceNeverBeyondLastAppliedAction ==
-    \E i, j \in Server : LearnCommitPointFromSyncSourceNeverBeyondLastApplied(i, j)
-
-AppendEntryAndLearnCommitPointFromSyncSourceAction ==
-    \E i, j \in Server : AppendEntryAndLearnCommitPointFromSyncSource(i, j)
 
 ----
 \* Properties to check
@@ -263,14 +191,6 @@ Next ==
     \/ RollbackOplogAction
     \/ BecomePrimaryByMagicAction
     \/ ClientWriteAction
-    \*
-    \* --- Commit point learning protocol
-    \/ AdvanceCommitPoint
-    \* \/ LearnCommitPointAction
-    \/ LearnCommitPointFromSyncSourceAction
-    \* \/ AppendEntryAndLearnCommitPointFromSyncSourceAction
-    \* \/ LearnCommitPointWithTermCheckAction
-    \* \/ LearnCommitPointFromSyncSourceNeverBeyondLastAppliedAction
 
 Liveness ==
     /\ SF_vars(AppendOplogAction)
@@ -278,14 +198,6 @@ Liveness ==
     \* A new primary should eventually write one entry.
     /\ WF_vars(\E i \in Server : LastTerm(log[i]) # globalCurrentTerm /\ ClientWrite(i))
     \* /\ WF_vars(ClientWriteAction)
-    \*
-    \* --- Commit point learning protocol
-    /\ WF_vars(AdvanceCommitPoint)
-    \* /\ WF_vars(LearnCommitPointAction)
-    /\ SF_vars(LearnCommitPointFromSyncSourceAction)
-    \* /\ SF_vars(AppendEntryAndLearnCommitPointFromSyncSourceAction)
-    \* /\ SF_vars(LearnCommitPointWithTermCheckAction)
-    \* /\ SF_vars(LearnCommitPointFromSyncSourceNeverBeyondLastAppliedAction)
 
 \* The specification must start with the initial state and transition according
 \* to Next.
