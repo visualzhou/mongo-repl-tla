@@ -198,6 +198,7 @@ UpdateTermThroughHeartbeat(i, j) ==
 Reconfig(i, newConfig) ==
     /\ state[i] = Leader
     /\ i \in newConfig
+    \* Only support single node addition/removal.
     /\ Cardinality(ServerViewOn(i) \ newConfig) + Cardinality(newConfig \ ServerViewOn(i)) <= 1
     \* The config entry must be committed.
     /\ LET configEntry == GetConfigEntry(i, GetConfigVersion(i))
