@@ -21,26 +21,25 @@ CONSTANTS Nil
 \* e.g. << {S1, S2}, {S1, S2, S3} >>
 VARIABLE configs
 
+\* The set of log entries that have been acknowledged as committed.
+VARIABLE committedEntries
+
 ----
 \* The following variables are all per server (functions with domain Server).
 
 \* The server's term number.
 VARIABLE currentTerm
 
-\* The commit point learned by each server.
-VARIABLE commitPoint
-
 \* The server's state (Follower, Candidate, or Leader).
 VARIABLE state
 
-electionVars == <<currentTerm, state>>
-serverVars == <<electionVars, commitPoint>>
+serverVars == <<currentTerm, state>>
 
 \* A Sequence of log entries. The index into this sequence is the index of the
 \* log entry. Unfortunately, the Sequence module defines Head(s) as the entry
 \* with index 1, so be careful not to use that!
 VARIABLE log
-logVars == <<log>>
+logVars == <<log, committedEntries>>
 
 \* End of per server variables.
 ----
@@ -80,8 +79,8 @@ Quorum(me) == {sub \in SUBSET(ServerViewOn(me)) : Cardinality(sub) * 2 > Cardina
 \* Define initial values for all variables
 InitServerVars == /\ currentTerm = [i \in Server |-> 0]
                   /\ state       = [i \in Server |-> Follower]
-                  /\ commitPoint = [i \in Server |-> [term |-> 0, index |-> 0]]
-InitLogVars == /\ log         = [i \in Server |-> << [term |-> 0, configVersion |-> 1] >>]
+InitLogVars == /\ log              = [i \in Server |-> << [term |-> 0, configVersion |-> 1] >>]
+               /\ committedEntries = {[term |-> 0, index |-> 1]}
 InitConfigs == configs = << Server >>
 Init == /\ InitServerVars
         /\ InitLogVars
@@ -100,7 +99,7 @@ AppendOplog(i, j) ==
     /\ currentTerm' = [currentTerm EXCEPT ![i] = IF LogTerm(j, Len(log[i]) + 1) > currentTerm[i] 
                                                  THEN LogTerm(j, Len(log[i]) + 1) 
                                                  ELSE currentTerm[i]]
-    /\ UNCHANGED <<state, commitPoint, configs>>
+    /\ UNCHANGED <<state, committedEntries, configs>>
 
 CanRollbackOplog(i, j) ==
     /\ j \in ServerViewOn(i)  \* j is in the config of i.
@@ -118,7 +117,7 @@ RollbackOplog(i, j) ==
     \* Rollback 1 oplog entry
     /\ LET new == [index2 \in 1..(Len(log[i]) - 1) |-> log[i][index2]]
          IN log' = [log EXCEPT ![i] = new]
-    /\ UNCHANGED <<serverVars, configs>>
+    /\ UNCHANGED <<serverVars, committedEntries, configs>>
 
 \* The set of nodes that has log[me][logIndex] in their oplog
 Agree(me, logIndex) ==
@@ -147,7 +146,7 @@ BecomePrimaryByMagic(i, ayeVoters) ==
     /\ LET noop == [term  |-> currentTerm[i] + 1, configVersion |-> GetConfigVersion(i)]
            newLog == Append(log[i], noop)
        IN  log' = [log EXCEPT ![i] = newLog]
-    /\ UNCHANGED <<commitPoint, configs>>
+    /\ UNCHANGED <<committedEntries, configs>>
 
 \* ACTION
 \* Leader i receives a client request to add v to the log.
@@ -156,7 +155,7 @@ ClientWrite(i) ==
     /\ LET entry == [term  |-> currentTerm[i], configVersion |-> GetConfigVersion(i)]
            newLog == Append(log[i], entry)
        IN  log' = [log EXCEPT ![i] = newLog]
-    /\ UNCHANGED <<serverVars, configs>>
+    /\ UNCHANGED <<serverVars, committedEntries, configs>>
         
 \* ACTION
 AdvanceCommitPoint ==
@@ -171,29 +170,15 @@ AdvanceCommitPoint ==
         /\ LogTerm(leader, Len(log[leader])) = currentTerm[leader]
         \* If an acknowledger has a higher term, the leader would step down.
         /\ \A j \in acknowledgers : currentTerm[j] <= currentTerm[leader]
-        /\ commitPoint' = [commitPoint EXCEPT ![leader] = [term |-> LastTerm(log[leader]), index |-> Len(log[leader])]]
-        /\ UNCHANGED <<electionVars, logVars, configs>>
-        
-\* Return whether Node i can learn the commit point from Node j.
-CommitPointLessThan(i, j) ==
-   \/ commitPoint[i].term < commitPoint[j].term
-   \/ /\ commitPoint[i].term = commitPoint[j].term
-      /\ commitPoint[i].index < commitPoint[j].index
-
-\* ACTION
-\* Node i learns the commit point from j via heartbeat with term check
-LearnCommitPointWithTermCheck(i, j) ==
-    /\ CommitPointLessThan(i, j)
-    /\ LastTerm(log[i]) = commitPoint[j].term
-    /\ commitPoint' = [commitPoint EXCEPT ![i] = commitPoint[j]]
-    /\ UNCHANGED <<electionVars, logVars, configs>>
+        /\ committedEntries' = committedEntries \union {[term |-> LastTerm(log[leader]), index |-> Len(log[leader])]}
+        /\ UNCHANGED <<serverVars, log, configs>>
        
 UpdateTermThroughHeartbeat(i, j) ==
     /\ j \in ServerViewOn(i)  \* j is in the config of i.
     /\ currentTerm[j] > currentTerm[i]
     /\ currentTerm' = [currentTerm EXCEPT ![i] = currentTerm[j]]
     /\ state' = [state EXCEPT ![i] = IF ~(state[i] = Leader) THEN state[i] ELSE Follower]
-    /\ UNCHANGED <<commitPoint, logVars, configs>>
+    /\ UNCHANGED <<logVars, configs>>
         
 Reconfig(i, newConfig) ==
     /\ state[i] = Leader
@@ -202,15 +187,14 @@ Reconfig(i, newConfig) ==
     /\ Cardinality(ServerViewOn(i) \ newConfig) + Cardinality(newConfig \ ServerViewOn(i)) <= 1
     \* The config entry must be committed.
     /\ LET configEntry == GetConfigEntry(i, GetConfigVersion(i))
-       IN /\ log[i][configEntry].term <= commitPoint[i].term
-          /\ configEntry <= commitPoint[i].index
+       IN [term |-> log[i][configEntry].term, index |-> configEntry] \in committedEntries
     \* The primary must have committed an entry in its current term.
-    /\ commitPoint[i].term = currentTerm[i]
+    /\ \E entry \in committedEntries : entry.term = currentTerm[i]
     /\ configs' = Append(configs, newConfig)
     /\ LET entry == [term  |-> currentTerm[i], configVersion |-> Len(configs) + 1]
            newLog == Append(log[i], entry)
        IN  log' = [log EXCEPT ![i] = newLog]
-    /\ UNCHANGED <<serverVars>>
+    /\ UNCHANGED <<serverVars, committedEntries>>
 
 ----
 AppendOplogAction ==
@@ -224,9 +208,6 @@ BecomePrimaryByMagicAction ==
 
 ClientWriteAction ==
     \E i \in Server : ClientWrite(i)
-    
-LearnCommitPointWithTermCheckAction ==
-    \E i, j \in Server : LearnCommitPointWithTermCheck(i, j)
     
 UpdateTermThroughHeartbeatAction ==
     \E i,j \in Server : UpdateTermThroughHeartbeat(i, j)
@@ -244,7 +225,6 @@ Next ==
     \/ ClientWriteAction
     \/ AdvanceCommitPoint
     \/ ReconfigAction
-    \/ LearnCommitPointWithTermCheckAction
     \/ UpdateTermThroughHeartbeatAction
 
 Liveness ==
@@ -261,8 +241,7 @@ Spec == Init /\ [][Next]_vars /\ Liveness
 \* RollbackCommitted and NeverRollbackCommitted are not actions.
 \* They are used for verification.
 RollbackCommitted(i) ==
-    /\ Len(log[i]) = commitPoint[i].index
-    /\ LastTerm(log[i]) = commitPoint[i].term
+    /\ [term |-> LastTerm(log[i]), index |-> Len(log[i])] \in committedEntries
     /\ \E j \in Server: CanRollbackOplog(i, j)
 
 NeverRollbackCommitted ==
