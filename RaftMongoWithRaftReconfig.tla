@@ -1,6 +1,6 @@
 --------------------------------- MODULE RaftMongoWithRaftReconfig --------------------------------
 \* This is the formal specification for the Raft consensus algorithm in MongoDB.
-\* It allows reconfig using the protocol described in Raft.
+\* It allows reconfig using the protocol for single server membership changes described in Raft.
 
 EXTENDS Naturals, FiniteSets, Sequences, TLC
 
@@ -21,7 +21,9 @@ CONSTANTS Nil
 \* e.g. << {S1, S2}, {S1, S2, S3} >>
 VARIABLE configs
 
-\* The set of log entries that have been acknowledged as committed.
+\* The set of log entries that have been acknowledged as committed, i.e.
+\* "immediately committed" entries. It does not include "prefix committed"
+\* entries, which are allowed to roll back on minority nodes.
 VARIABLE committedEntries
 
 ----
@@ -96,10 +98,7 @@ AppendOplog(i, j) ==
     /\ Len(log[i]) < Len(log[j])
     /\ LastTerm(log[i]) = LogTerm(j, Len(log[i]))
     /\ log' = [log EXCEPT ![i] = Append(log[i], log[j][Len(log[i]) + 1])]
-    /\ currentTerm' = [currentTerm EXCEPT ![i] = IF LogTerm(j, Len(log[i]) + 1) > currentTerm[i] 
-                                                 THEN LogTerm(j, Len(log[i]) + 1) 
-                                                 ELSE currentTerm[i]]
-    /\ UNCHANGED <<state, committedEntries, configs>>
+    /\ UNCHANGED <<serverVars, committedEntries, configs>>
 
 CanRollbackOplog(i, j) ==
     /\ j \in ServerViewOn(i)  \* j is in the config of i.
@@ -119,7 +118,7 @@ RollbackOplog(i, j) ==
          IN log' = [log EXCEPT ![i] = new]
     /\ UNCHANGED <<serverVars, committedEntries, configs>>
 
-\* The set of nodes that has log[me][logIndex] in their oplog
+\* The set of nodes in my config that has log[me][logIndex] in their oplog
 Agree(me, logIndex) ==
     { node \in ServerViewOn(me) :
         /\ Len(log[node]) >= logIndex
@@ -139,14 +138,10 @@ BecomePrimaryByMagic(i, ayeVoters) ==
     /\ state' = [index \in Server |-> IF index \notin ayeVoters
                                       THEN state[index]
                                       ELSE IF index = i THEN Leader ELSE Follower]
-    /\ currentTerm' = [index \in Server |-> IF \/ index \in ayeVoters 
-                                               \/ index = i
+    /\ currentTerm' = [index \in Server |-> IF index \in (ayeVoters \union {i})
                                             THEN currentTerm[i] + 1 
                                             ELSE currentTerm[index]]
-    /\ LET noop == [term  |-> currentTerm[i] + 1, configVersion |-> GetConfigVersion(i)]
-           newLog == Append(log[i], noop)
-       IN  log' = [log EXCEPT ![i] = newLog]
-    /\ UNCHANGED <<committedEntries, configs>>
+    /\ UNCHANGED <<logVars, configs>>
 
 \* ACTION
 \* Leader i receives a client request to add v to the log.
@@ -158,6 +153,7 @@ ClientWrite(i) ==
     /\ UNCHANGED <<serverVars, committedEntries, configs>>
         
 \* ACTION
+\* Commit the latest log entry on a primary.
 AdvanceCommitPoint ==
     \E leader \in Server : \E acknowledgers \in SUBSET Server :
         /\ state[leader] = Leader
@@ -247,10 +243,13 @@ RollbackCommitted(i) ==
 NeverRollbackCommitted ==
     \A i \in Server: ~RollbackCommitted(i)
     
-NoTwoPrimariesInSameTerm ==
-    \A i, j \in Server: \/ i = j
-                        \/ state[i] = Follower 
-                        \/ state[j] = Follower
-                        \/ ~ (currentTerm[i] = currentTerm[j])
+TwoPrimariesInSameTerm == 
+    \E i, j \in Server :
+        /\ i # j 
+        /\ currentTerm[i] = currentTerm[j] 
+        /\ state[i] = Leader 
+        /\ state[j] = Leader
+
+NoTwoPrimariesInSameTerm == ~TwoPrimariesInSameTerm
 
 ===============================================================================
